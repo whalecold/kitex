@@ -20,6 +20,8 @@ import (
 	"context"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 var fixedWindowTime = time.Second
@@ -32,6 +34,7 @@ type qpsLimiter struct {
 	once       int32
 	ticker     *time.Ticker
 	tickerDone chan bool
+	limiter    *rate.Limiter
 }
 
 // NewQPSLimiter creates qpsLimiter.
@@ -42,6 +45,7 @@ func NewQPSLimiter(interval time.Duration, limit int) RateLimiter {
 		interval: interval,
 		tokens:   once,
 		once:     once,
+		limiter:  rate.NewLimiter(rate.Limit(limit), limit*2),
 	}
 	go l.startTicker(interval)
 	return l
@@ -53,6 +57,7 @@ func (l *qpsLimiter) UpdateLimit(limit int) {
 	atomic.StoreInt32(&l.limit, int32(limit))
 	atomic.StoreInt32(&l.once, once)
 	l.resetTokens(once)
+	l.limiter = rate.NewLimiter(rate.Limit(limit), limit*2)
 }
 
 // UpdateQPSLimit update the interval and limit. It is **not** concurrent-safe.
@@ -61,6 +66,7 @@ func (l *qpsLimiter) UpdateQPSLimit(interval time.Duration, limit int) {
 	atomic.StoreInt32(&l.limit, int32(limit))
 	atomic.StoreInt32(&l.once, once)
 	l.resetTokens(once)
+	l.limiter = rate.NewLimiter(rate.Limit(limit), limit*2)
 	if interval != l.interval {
 		l.interval = interval
 		l.stopTicker()
@@ -70,13 +76,14 @@ func (l *qpsLimiter) UpdateQPSLimit(interval time.Duration, limit int) {
 
 // Acquire one token.
 func (l *qpsLimiter) Acquire(ctx context.Context) bool {
-	if atomic.LoadInt32(&l.limit) <= 0 {
-		return true
-	}
-	if atomic.LoadInt32(&l.tokens) <= 0 {
-		return false
-	}
-	return atomic.AddInt32(&l.tokens, -1) >= 0
+	return l.limiter.Allow()
+	//if atomic.LoadInt32(&l.limit) <= 0 {
+	//	return true
+	//}
+	//if atomic.LoadInt32(&l.tokens) <= 0 {
+	//	return false
+	//}
+	//return atomic.AddInt32(&l.tokens, -1) >= 0
 }
 
 // Status returns the current status.
